@@ -223,4 +223,72 @@ impl Spec {
     pub fn add(&mut self, key: impl Into<&'static str>, value: impl Into<Value>) {
         self.fields.insert(key.into().to_owned(), value.into());
     }
+
+    /// Returns the authored `typeName` token if present.
+    #[inline]
+    pub fn type_name(&self) -> Option<&str> {
+        self.fields
+            .get(schema::FieldKey::TypeName.as_str())
+            .and_then(Value::as_str_like)
+    }
+
+    /// Returns the authored `specifier` if present.
+    #[inline]
+    pub fn specifier(&self) -> Option<Specifier> {
+        match self.fields.get(schema::FieldKey::Specifier.as_str()) {
+            Some(Value::Specifier(specifier)) => Some(*specifier),
+            _ => None,
+        }
+    }
+
+    /// Returns the authored default value for an attribute spec.
+    #[inline]
+    pub fn default_value(&self) -> Option<&Value> {
+        self.fields.get(schema::FieldKey::Default.as_str())
+    }
+
+    /// Returns connection targets authored on an attribute connection spec.
+    #[inline]
+    pub fn connection_paths(&self) -> Vec<Path> {
+        self.fields
+            .get(schema::FieldKey::ConnectionPaths.as_str())
+            .map(Value::as_path_list)
+            .unwrap_or_default()
+    }
+
+    /// Returns relationship targets authored on a relationship spec.
+    #[inline]
+    pub fn target_paths(&self) -> Vec<Path> {
+        self.fields
+            .get(schema::FieldKey::TargetPaths.as_str())
+            .map(Value::as_path_list)
+            .unwrap_or_default()
+    }
+
+    /// Returns direct child prim names in composed list-op order.
+    #[inline]
+    pub fn prim_children(&self) -> Vec<String> {
+        self.fields
+            .get(schema::ChildrenKey::PrimChildren.as_str())
+            .map(Value::as_token_list)
+            .unwrap_or_default()
+    }
+
+    /// Returns direct property child names in composed list-op order.
+    #[inline]
+    pub fn property_children(&self) -> Vec<String> {
+        self.fields
+            .get(schema::ChildrenKey::PropertyChildren.as_str())
+            .map(Value::as_token_list)
+            .unwrap_or_default()
+    }
+
+    /// Returns applied API schema tokens in composed list-op order.
+    #[inline]
+    pub fn api_schemas(&self) -> Vec<String> {
+        self.fields
+            .get("apiSchemas")
+            .map(Value::as_token_list)
+            .unwrap_or_default()
+    }
 }

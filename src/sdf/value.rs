@@ -106,6 +106,141 @@ pub enum Value {
     PathExpression,
 }
 
+impl Value {
+    /// Returns string-like scalar values without allocating.
+    #[inline]
+    pub fn as_str_like(&self) -> Option<&str> {
+        match self {
+            Self::String(value) | Self::Token(value) | Self::AssetPath(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Returns a mixed numeric scalar as `f64`.
+    #[inline]
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Self::Half(value) => Some(value.to_f64()),
+            Self::Float(value) => Some(*value as f64),
+            Self::Double(value) | Self::TimeCode(value) => Some(*value),
+            Self::Int(value) => Some(*value as f64),
+            Self::Uint(value) => Some(*value as f64),
+            Self::Int64(value) => Some(*value as f64),
+            Self::Uint64(value) => Some(*value as f64),
+            _ => None,
+        }
+    }
+
+    /// Returns an integer scalar as `i32` when it fits.
+    #[inline]
+    pub fn as_i32(&self) -> Option<i32> {
+        match self {
+            Self::Int(value) => Some(*value),
+            Self::Uint(value) => i32::try_from(*value).ok(),
+            Self::Int64(value) => i32::try_from(*value).ok(),
+            Self::Uint64(value) => i32::try_from(*value).ok(),
+            _ => None,
+        }
+    }
+
+    /// Returns a 3-vector as `f64` values.
+    #[inline]
+    pub fn as_vec3_f64(&self) -> Option<[f64; 3]> {
+        match self {
+            Self::Vec3h(values) if values.len() >= 3 => Some([
+                values[0].to_f64(),
+                values[1].to_f64(),
+                values[2].to_f64(),
+            ]),
+            Self::Vec3f(values) if values.len() >= 3 => {
+                Some([values[0] as f64, values[1] as f64, values[2] as f64])
+            }
+            Self::Vec3d(values) if values.len() >= 3 => Some([values[0], values[1], values[2]]),
+            Self::Vec3i(values) if values.len() >= 3 => {
+                Some([values[0] as f64, values[1] as f64, values[2] as f64])
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns a quaternion as `[w, x, y, z]` in `f64`.
+    #[inline]
+    pub fn as_quat_wxyz_f64(&self) -> Option<[f64; 4]> {
+        match self {
+            Self::Quath(values) if values.len() >= 4 => Some([
+                values[0].to_f64(),
+                values[1].to_f64(),
+                values[2].to_f64(),
+                values[3].to_f64(),
+            ]),
+            Self::Quatf(values) if values.len() >= 4 => Some([
+                values[0] as f64,
+                values[1] as f64,
+                values[2] as f64,
+                values[3] as f64,
+            ]),
+            Self::Quatd(values) if values.len() >= 4 => {
+                Some([values[0], values[1], values[2], values[3]])
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns numeric arrays as `f64` values.
+    #[inline]
+    pub fn as_f64_vec(&self) -> Option<Vec<f64>> {
+        match self {
+            Self::HalfVec(values) => Some(values.iter().map(|value| value.to_f64()).collect()),
+            Self::FloatVec(values) => Some(values.iter().map(|value| *value as f64).collect()),
+            Self::DoubleVec(values) => Some(values.clone()),
+            Self::IntVec(values) => Some(values.iter().map(|value| *value as f64).collect()),
+            Self::UintVec(values) => Some(values.iter().map(|value| *value as f64).collect()),
+            Self::Int64Vec(values) => Some(values.iter().map(|value| *value as f64).collect()),
+            Self::Uint64Vec(values) => Some(values.iter().map(|value| *value as f64).collect()),
+            _ => None,
+        }
+    }
+
+    /// Returns token-list-like values in authored list-op order.
+    #[inline]
+    pub fn as_token_list(&self) -> Vec<String> {
+        match self {
+            Self::Token(value) => vec![value.clone()],
+            Self::TokenVec(values) => values.clone(),
+            Self::TokenListOp(op) => {
+                list_op_items(&op.explicit_items, &op.prepended_items, &op.added_items)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Returns path-list-like values in authored list-op order.
+    #[inline]
+    pub fn as_path_list(&self) -> Vec<Path> {
+        match self {
+            Self::PathListOp(op) => {
+                list_op_items(&op.explicit_items, &op.prepended_items, &op.added_items)
+            }
+            Self::PathVec => Vec::new(),
+            _ => Vec::new(),
+        }
+    }
+}
+
+fn list_op_items<T: Clone>(
+    explicit_items: &[T],
+    prepended_items: &[T],
+    added_items: &[T],
+) -> Vec<T> {
+    if !explicit_items.is_empty() {
+        explicit_items.to_vec()
+    } else if !prepended_items.is_empty() {
+        prepended_items.to_vec()
+    } else {
+        added_items.to_vec()
+    }
+}
+
 /// Convert from `&str` to `Value`.
 ///
 /// Used a lot in text parser since all tokens are basically strings.
