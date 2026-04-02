@@ -957,6 +957,11 @@ impl<'a> Parser<'a> {
 
     /// Decode a typed value based on USD's scalar/array/role type tables.
     fn parse_value(&mut self, ty: Type) -> Result<sdf::Value> {
+        if self.is_next(Token::None) {
+            self.fetch_next()?;
+            return Ok(sdf::Value::ValueBlock);
+        }
+
         let value = match ty {
             // Bool
             Type::Bool => sdf::Value::Bool(self.parse_bool()?),
@@ -2181,6 +2186,27 @@ def Xform "World"
                 .unwrap(),
             vec![String::from("xformOp:translate"), String::from("xformOp:rotateXYZ")]
         )
+    }
+
+    #[test]
+    fn parse_none_attribute_value() {
+        let mut parser = Parser::new(
+            r#"
+#usda 1.0
+
+def Mesh "Mesh"
+{
+    int[] primvars:displayColor:indices = None
+}
+            "#,
+        );
+
+        let data = parser.parse().unwrap();
+        let property = data
+            .get(&sdf::path("/Mesh.primvars:displayColor:indices").unwrap())
+            .unwrap();
+
+        assert_eq!(property.fields.get("default"), Some(&sdf::Value::ValueBlock));
     }
 
     #[test]
