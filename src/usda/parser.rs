@@ -790,6 +790,13 @@ impl<'a> Parser<'a> {
                     spec.add("assetInfo", value);
                 }
             }
+            "displayName" => {
+                ensure!(list_op.is_none(), "displayName metadata does not support list ops");
+                let value = self
+                    .parse_token::<String>()
+                    .context("Unable to parse displayName metadata")?;
+                spec.add("displayName", sdf::Value::String(value));
+            }
             n if n == FieldKey::Documentation.as_str() => {
                 ensure!(list_op.is_none(), "doc metadata does not support list ops");
                 let value = self.parse_token::<String>().context("Unable to parse doc metadata")?;
@@ -2322,6 +2329,29 @@ def Mesh "Mesh_001" (
 
         assert!(api.explicit_items.is_empty());
         assert_eq!(api.prepended_items, vec![String::from("MaterialBindingAPI")]);
+    }
+
+    #[test]
+    fn parse_prim_metadata_display_name() {
+        let mut parser = Parser::new(
+            r#"
+#usda 1.0
+
+def Mesh "mesh" (
+    displayName = "base_mount"
+)
+{
+}
+            "#,
+        );
+
+        let data = parser.parse().unwrap();
+        let mesh = data.get(&sdf::path("/mesh").unwrap()).unwrap();
+
+        assert_eq!(
+            mesh.fields.get("displayName"),
+            Some(&sdf::Value::String("base_mount".to_string()))
+        );
     }
 
     #[test]
