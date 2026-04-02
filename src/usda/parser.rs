@@ -772,12 +772,16 @@ impl<'a> Parser<'a> {
                 let value = self.parse_token::<String>().context("Unable to parse kind metadata")?;
                 spec.add(FieldKey::Kind, sdf::Value::Token(value));
             }
-            "customData" => {
-                ensure!(list_op.is_none(), "customData metadata does not support list ops");
+            name @ ("customData" | "assetInfo") => {
+                ensure!(list_op.is_none(), "{name} metadata does not support list ops");
                 let value = self
                     .parse_property_metadata_value()
-                    .context("Unable to parse customData dictionary")?;
-                spec.add("customData", value);
+                    .with_context(|| format!("Unable to parse {name} dictionary"))?;
+                if name == "customData" {
+                    spec.add("customData", value);
+                } else {
+                    spec.add("assetInfo", value);
+                }
             }
             n if n == FieldKey::Documentation.as_str() => {
                 ensure!(list_op.is_none(), "doc metadata does not support list ops");
