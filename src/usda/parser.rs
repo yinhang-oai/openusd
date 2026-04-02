@@ -321,8 +321,17 @@ impl<'a> Parser<'a> {
                 }
                 Token::Rel => {
                     self.fetch_next()?;
-                    self.read_relationship(&prim_path, &mut properties, data)
+                    self.read_relationship(&prim_path, &mut properties, data, None)
                         .context("Unable to read relationship")?;
+                }
+                Token::Add | Token::Append | Token::Prepend | Token::Delete | Token::Reorder => {
+                    let list_op = self.fetch_next()?;
+                    match self.fetch_next()? {
+                        Token::Rel => self
+                            .read_relationship(&prim_path, &mut properties, data, Some(list_op))
+                            .context("Unable to read relationship")?,
+                        other => bail!("Unexpected token after relationship list op: {other:?}"),
+                    }
                 }
                 _ => {
                     self.read_attribute(&prim_path, &mut properties, data)
@@ -624,6 +633,7 @@ impl<'a> Parser<'a> {
         current_path: &sdf::Path,
         properties: &mut Vec<String>,
         data: &mut HashMap<sdf::Path, sdf::Spec>,
+        list_op: Option<Token<'a>>,
     ) -> Result<()> {
         let name_token = self.fetch_next()?;
         let name = match name_token {
@@ -655,11 +665,15 @@ impl<'a> Parser<'a> {
         }
 
         self.ensure_pun('=')?;
-        let list_op = match self.peek_next() {
-            Some(Ok(Token::Add | Token::Append | Token::Prepend | Token::Delete | Token::Reorder)) => {
-                Some(self.fetch_next()?)
+        let list_op = if list_op.is_some() {
+            list_op
+        } else {
+            match self.peek_next() {
+                Some(Ok(
+                    Token::Add | Token::Append | Token::Prepend | Token::Delete | Token::Reorder,
+                )) => Some(self.fetch_next()?),
+                _ => None,
             }
-            _ => None,
         };
         let targets = self
             .parse_connection_targets()
@@ -2068,6 +2082,38 @@ def Scope "Root"
             .expect("missing targets on relationship");
         assert_eq!(targets.explicit_items.len(), 1);
         assert_eq!(targets.explicit_items[0].as_str(), "/Mat");
+    }
+
+    #[test]
+    fn parse_prepend_relationship_specs() {
+        let mut parser = Parser::new(
+            r#"
+#usda 1.0
+
+def Scope "Root"
+{
+    prepend rel mjc:path = [
+        </Root/A>,
+        </Root/B>,
+    ]
+}
+            "#,
+        );
+
+        let data = parser.parse().unwrap();
+        let rel_spec = data
+            .get(&sdf::path("/Root.mjc:path").unwrap())
+            .expect("missing relationship spec");
+        let targets = rel_spec
+            .fields
+            .get(FieldKey::TargetPaths.as_str())
+            .and_then(|v| v.try_as_path_list_op_ref())
+            .expect("missing targets on relationship");
+
+        assert!(targets.explicit_items.is_empty());
+        assert_eq!(targets.prepended_items.len(), 2);
+        assert_eq!(targets.prepended_items[0].as_str(), "/Root/A");
+        assert_eq!(targets.prepended_items[1].as_str(), "/Root/B");
     }
 
     #[test]
