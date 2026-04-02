@@ -13,7 +13,7 @@ use super::*;
 /// - h: half
 /// - i: int
 ///
-#[derive(Debug, Clone, EnumIs, EnumTryAs)]
+#[derive(Debug, Clone, PartialEq, EnumIs, EnumTryAs)]
 pub enum Value {
     Bool(bool),
     BoolVec(Vec<bool>),
