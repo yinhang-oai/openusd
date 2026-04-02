@@ -144,7 +144,7 @@ pub struct Reference {
 /// `ListOp`` is a value type representing an operation that edits a list.
 /// It may add or remove items, reorder them, or replace the list entirely.
 #[derive(Default, Debug, Clone, PartialEq)]
-pub struct ListOp<T: Default + Clone> {
+pub struct ListOp<T: Default + Clone + PartialEq> {
     pub explicit: bool,
     pub explicit_items: Vec<T>,
     pub added_items: Vec<T>,

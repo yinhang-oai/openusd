@@ -15,6 +15,9 @@ use super::*;
 ///
 #[derive(Debug, Clone, PartialEq, EnumIs, EnumTryAs)]
 pub enum Value {
+    /// None value, only produced by expressions (not directly assignable).
+    None,
+
     Bool(bool),
     BoolVec(Vec<bool>),
 

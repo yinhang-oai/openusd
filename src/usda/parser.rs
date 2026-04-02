@@ -123,6 +123,11 @@ impl<'a> Parser<'a> {
         self.iter.peek().map(|(token, _)| token)
     }
 
+    #[inline]
+    fn is_next(&mut self, expected: Token) -> bool {
+        matches!(self.peek_next(), Some(Ok(t)) if *t == expected)
+    }
+
     fn ensure_next(&mut self, expected_token: Token) -> Result<()> {
         let token = self.fetch_next()?;
         ensure!(
@@ -177,7 +182,7 @@ impl<'a> Parser<'a> {
 
         let mut root = sdf::Spec::new(sdf::SpecType::PseudoRoot);
 
-        if self.peek_next().map(|r| r.as_ref().ok()) != Some(Some(&Token::Punctuation('('))) {
+        if !self.is_next(Token::Punctuation('(')) {
             return Ok(root);
         }
 
@@ -345,14 +350,14 @@ impl<'a> Parser<'a> {
         let mut custom = false;
         let mut variability = sdf::Variability::Varying;
 
-        if let Some(Ok(Token::Custom)) = self.peek_next() {
+        if self.is_next(Token::Custom) {
             custom = true;
             self.fetch_next()?;
         }
 
-        if let Some(Ok(Token::Varying)) = self.peek_next() {
+        if self.is_next(Token::Varying) {
             self.fetch_next()?;
-        } else if let Some(Ok(Token::Uniform)) = self.peek_next() {
+        } else if self.is_next(Token::Uniform) {
             variability = sdf::Variability::Uniform;
             self.fetch_next()?;
         }
@@ -372,13 +377,13 @@ impl<'a> Parser<'a> {
         };
 
         // Check for metadata before checking for assignment
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('(')))) {
+        if self.is_next(Token::Punctuation('(')) {
             self.parse_property_metadata(&mut spec)
                 .context("Unable to parse attribute metadata")?;
         }
 
         if name.contains(".connect") {
-            if matches!(self.peek_next(), Some(Ok(Token::Punctuation('=')))) {
+            if self.is_next(Token::Punctuation('=')) {
                 self.fetch_next()?;
                 let list_op = match self.peek_next() {
                     Some(Ok(Token::Add | Token::Append | Token::Prepend | Token::Delete | Token::Reorder)) => {
@@ -406,7 +411,7 @@ impl<'a> Parser<'a> {
         }
 
         // Check if there's an assignment
-        if !matches!(self.peek_next(), Some(Ok(Token::Punctuation('=')))) {
+        if !self.is_next(Token::Punctuation('=')) {
             let path = current_path.append_property(name)?;
             properties.push(name.to_string());
 
@@ -422,7 +427,7 @@ impl<'a> Parser<'a> {
         let path = current_path.append_property(name)?;
 
         // Check for metadata after value (could appear here instead of before)
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('(')))) {
+        if self.is_next(Token::Punctuation('(')) {
             self.parse_property_metadata(&mut spec)
                 .context("Unable to parse attribute metadata")?;
         }
@@ -439,7 +444,7 @@ impl<'a> Parser<'a> {
     }
     /// Parses a connection target list into USD paths.
     fn parse_connection_targets(&mut self) -> Result<Vec<sdf::Path>> {
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('[')))) {
+        if self.is_next(Token::Punctuation('[')) {
             let mut paths = Vec::new();
             self.parse_array_fn(|this| {
                 paths.push(this.parse_path_reference().context("Connection path expected")?);
@@ -466,7 +471,7 @@ impl<'a> Parser<'a> {
         self.ensure_pun('(')?;
 
         loop {
-            if matches!(self.peek_next(), Some(Ok(Token::Punctuation(')')))) {
+            if self.is_next(Token::Punctuation(')')) {
                 self.fetch_next()?;
                 break;
             }
@@ -492,7 +497,7 @@ impl<'a> Parser<'a> {
                 .with_context(|| format!("Unable to parse attribute metadata value for {name}"))?;
             spec.fields.insert(name, value);
 
-            if matches!(self.peek_next(), Some(Ok(Token::Punctuation(',')))) {
+            if self.is_next(Token::Punctuation(',')) {
                 self.fetch_next()?;
             }
         }
@@ -502,6 +507,27 @@ impl<'a> Parser<'a> {
 
     /// Parse a single attribute metadata value (scalar or array) from within a metadata block.
     fn parse_property_metadata_value(&mut self) -> Result<sdf::Value> {
+        // Handle array case first by peeking, so parse_array_fn can consume the '['
+        if self.is_next(Token::Punctuation('[')) {
+            let mut values = Vec::new();
+            self.parse_array_fn(|this| {
+                let entry = this.fetch_next()?;
+                let value = match entry {
+                    Token::String(v) => v.to_owned(),
+                    Token::Identifier(v) | Token::NamespacedIdentifier(v) | Token::Number(v) => v.to_owned(),
+                    other => bail!("Unsupported metadata array element: {other:?}"),
+                };
+                values.push(value);
+                Ok(())
+            })?;
+            return Ok(sdf::Value::StringVec(values));
+        }
+
+        // Handle dictionary case by peeking, so parse_dictionary can consume the '{'
+        if self.is_next(Token::Punctuation('{')) {
+            return self.parse_dictionary();
+        }
+
         let token = self.fetch_next()?;
         match token {
             Token::String(value) => Ok(sdf::Value::String(value.to_owned())),
@@ -515,50 +541,24 @@ impl<'a> Parser<'a> {
                     bail!("Unable to parse numeric metadata value: {raw}");
                 }
             }
-            Token::Punctuation('[') => {
-                let mut values = Vec::new();
-                loop {
-                    if matches!(self.peek_next(), Some(Ok(Token::Punctuation(']')))) {
-                        self.fetch_next()?;
-                        break;
-                    }
-
-                    let entry = self.fetch_next()?;
-                    let value = match entry {
-                        Token::String(v) => v.to_owned(),
-                        Token::Identifier(v) | Token::NamespacedIdentifier(v) | Token::Number(v) => v.to_owned(),
-                        other => bail!("Unsupported metadata array element: {other:?}"),
-                    };
-                    values.push(value);
-
-                    match self.fetch_next()? {
-                        Token::Punctuation(',') => continue,
-                        Token::Punctuation(']') => break,
-                        other => bail!("Unexpected token in metadata array: {other:?}"),
-                    }
-                }
-                Ok(sdf::Value::StringVec(values))
-            }
-            Token::Punctuation('{') => self.parse_dictionary(),
             other => bail!("Unsupported property metadata value token: {other:?}"),
         }
     }
 
     #[inline]
     fn is_type_hint_name(name: &str) -> bool {
-        if name == "dictionary" {
-            return true;
-        }
         Self::parse_data_type(name).is_ok()
     }
 
     /// Parse a dictionary value from `{` to `}`.
     fn parse_dictionary(&mut self) -> Result<sdf::Value> {
+        self.ensure_pun('{').context("Dictionary must start with {")?;
+
         let mut dict = HashMap::new();
 
         loop {
             // Check for closing brace
-            if matches!(self.peek_next(), Some(Ok(Token::Punctuation('}')))) {
+            if self.is_next(Token::Punctuation('}')) {
                 self.fetch_next()?;
                 break;
             }
@@ -582,7 +582,7 @@ impl<'a> Parser<'a> {
             };
 
             let key = match key_token {
-                Token::Identifier(s) | Token::NamespacedIdentifier(s) => s.to_owned(),
+                Token::Identifier(s) | Token::NamespacedIdentifier(s) | Token::String(s) => s.to_owned(),
                 // Allow keywords as dictionary keys by converting them to strings
                 other => {
                     if let Some(lexeme) = keyword_lexeme(&other) {
@@ -597,25 +597,20 @@ impl<'a> Parser<'a> {
 
             // Parse the value recursively
             let value = if let Some(type_hint_token) = _type_hint {
-                match type_hint_token {
-                    Token::Dictionary => {
-                        self.ensure_pun('{')?;
-                        self.parse_dictionary()?
-                    }
-                    Token::Identifier(type_name) => {
-                        let ty = Self::parse_data_type(type_name)
-                            .with_context(|| format!("Unable to parse dictionary value type {type_name}"))?;
-                        self.parse_value(ty)?
-                    }
+                let ty = match type_hint_token {
+                    Token::Dictionary => Type::Dictionary,
+                    Token::Identifier(type_name) => Self::parse_data_type(type_name)
+                        .with_context(|| format!("Unable to parse dictionary value type {type_name}"))?,
                     other => bail!("Unsupported dictionary type hint: {other:?}"),
-                }
+                };
+                self.parse_value(ty)?
             } else {
                 self.parse_property_metadata_value()?
             };
             dict.insert(key, value);
 
             // Handle optional trailing comma or newline
-            if matches!(self.peek_next(), Some(Ok(Token::Punctuation('}')))) {
+            if self.is_next(Token::Punctuation('}')) {
                 self.fetch_next()?;
                 break;
             }
@@ -639,13 +634,13 @@ impl<'a> Parser<'a> {
         let mut spec = sdf::Spec::new(sdf::SpecType::Relationship);
 
         // Check for metadata before or instead of assignment
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('(')))) {
+        if self.is_next(Token::Punctuation('(')) {
             self.parse_property_metadata(&mut spec)
                 .context("Unable to parse relationship metadata")?;
         }
 
         // Check if there's an assignment
-        if !matches!(self.peek_next(), Some(Ok(Token::Punctuation('=')))) {
+        if !self.is_next(Token::Punctuation('=')) {
             let path = current_path.append_property(name)?;
             properties.push(name.to_string());
 
@@ -683,7 +678,7 @@ impl<'a> Parser<'a> {
             sdf::Value::Variability(sdf::Variability::Varying),
         );
 
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('(')))) {
+        if self.is_next(Token::Punctuation('(')) {
             self.parse_property_metadata(&mut spec)
                 .context("Unable to parse relationship metadata")?;
         }
@@ -698,9 +693,7 @@ impl<'a> Parser<'a> {
         let mut current = first;
 
         loop {
-            if matches!(self.peek_next(), Some(Ok(Token::Punctuation(')'))))
-                || matches!(self.peek_next(), Some(Ok(Token::Punctuation('{'))))
-            {
+            if self.is_next(Token::Punctuation(')')) || self.is_next(Token::Punctuation('{')) {
                 break;
             }
 
@@ -759,7 +752,7 @@ impl<'a> Parser<'a> {
                 spec.add(FieldKey::References, sdf::Value::ReferenceListOp(list_op));
             }
             n if n == FieldKey::InheritPaths.as_str() => {
-                let paths = if matches!(self.peek_next(), Some(Ok(Token::Punctuation('[')))) {
+                let paths = if self.is_next(Token::Punctuation('[')) {
                     let mut collected = Vec::new();
                     self.parse_array_fn(|this| {
                         collected.push(this.parse_inherit_path()?);
@@ -811,7 +804,7 @@ impl<'a> Parser<'a> {
             custom_data: HashMap::new(),
         };
 
-        if matches!(self.peek_next(), Some(Ok(Token::PathRef(_)))) {
+        if matches!(self.peek_next(), Some(Ok(Token::PathRef(..)))) {
             let path = self
                 .fetch_next()?
                 .try_as_path_ref()
@@ -819,7 +812,7 @@ impl<'a> Parser<'a> {
             reference.prim_path = sdf::Path::new(path)?;
         }
 
-        if let Some(Ok(Token::Punctuation('('))) = self.peek_next() {
+        if self.is_next(Token::Punctuation('(')) {
             self.parse_reference_layer_offset(&mut reference.layer_offset)
                 .context("Unable to parse reference layer offset")?;
         }
@@ -854,7 +847,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a list-op friendly sequence of references.
     fn parse_reference_list(&mut self) -> Result<Vec<sdf::Reference>> {
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('[')))) {
+        if self.is_next(Token::Punctuation('[')) {
             let mut out = Vec::new();
             self.parse_array_fn(|this| {
                 out.push(this.parse_reference()?);
@@ -875,7 +868,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_token_list(&mut self) -> Result<Vec<String>> {
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('[')))) {
+        if self.is_next(Token::Punctuation('[')) {
             self.parse_array()
         } else {
             let value = self.parse_token::<String>()?;
@@ -883,7 +876,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn apply_list_op<T: Default + Clone>(&mut self, op: Option<Token<'a>>, items: Vec<T>) -> Result<sdf::ListOp<T>> {
+    fn apply_list_op<T: Default + Clone + PartialEq>(
+        &mut self,
+        op: Option<Token<'a>>,
+        items: Vec<T>,
+    ) -> Result<sdf::ListOp<T>> {
         let mut list = sdf::ListOp::default();
 
         match op {
@@ -927,6 +924,7 @@ impl<'a> Parser<'a> {
             Type::Int4Vec => sdf::Value::Vec4i(self.parse_array_of_tuples::<_, 4>()?),
             Type::Uint => sdf::Value::Uint(self.parse_token()?),
             Type::Int64 => sdf::Value::Int64(self.parse_token()?),
+            Type::Int64Vec => sdf::Value::Int64Vec(self.parse_array()?),
             Type::Uint64 => sdf::Value::Uint64(self.parse_token()?),
 
             // Half
@@ -975,6 +973,8 @@ impl<'a> Parser<'a> {
             Type::Matrix2d => sdf::Value::Matrix2d(self.parse_matrix_value::<2>()?),
             Type::Matrix3d => sdf::Value::Matrix3d(self.parse_matrix_value::<3>()?),
             Type::Matrix4d => sdf::Value::Matrix4d(self.parse_matrix_value::<4>()?),
+
+            Type::Dictionary => self.parse_dictionary()?,
         };
 
         Ok(value)
@@ -1003,6 +1003,7 @@ impl<'a> Parser<'a> {
             "int4[]" => Type::Int4Vec,
             "uint" => Type::Uint,
             "int64" => Type::Int64,
+            "int64[]" => Type::Int64Vec,
             "uint64" => Type::Uint64,
 
             // Half
@@ -1050,6 +1051,8 @@ impl<'a> Parser<'a> {
             "string[]" | "token[]" => Type::TokenVec,
             "asset" => Type::Asset,
             "asset[]" => Type::AssetVec,
+
+            "dictionary" => Type::Dictionary,
 
             _ => bail!("Unsupported data type: {ty}"),
         };
@@ -1160,7 +1163,7 @@ impl<'a> Parser<'a> {
             sublayers.push(asset_path.to_string());
 
             let mut layer_offset = sdf::LayerOffset::default();
-            if let Some(Ok(Token::Punctuation('('))) = this.peek_next() {
+            if this.is_next(Token::Punctuation('(')) {
                 let mut offset = None;
                 let mut scale = None;
 
@@ -1207,7 +1210,7 @@ impl<'a> Parser<'a> {
 
         let mut index = 0;
         loop {
-            if self.peek_next().map(|r| r.as_ref().ok()) == Some(Some(&Token::Punctuation(']'))) {
+            if self.is_next(Token::Punctuation(']')) {
                 self.fetch_next()?;
                 break;
             }
@@ -1234,7 +1237,7 @@ impl<'a> Parser<'a> {
 
         let mut index = 0;
         loop {
-            if self.peek_next().map(|r| r.as_ref().ok()) == Some(Some(&Token::Punctuation(')'))) {
+            if self.is_next(Token::Punctuation(')')) {
                 self.fetch_next()?;
                 break;
             }
@@ -1310,7 +1313,7 @@ impl<'a> Parser<'a> {
 
     /// Parse either a single matrix or an array of matrices, depending on the next token.
     fn parse_matrix_value<const N: usize>(&mut self) -> Result<Vec<f64>> {
-        if matches!(self.peek_next(), Some(Ok(Token::Punctuation('[')))) {
+        if self.is_next(Token::Punctuation('[')) {
             self.parse_matrix_array::<N>()
         } else {
             self.parse_matrix::<N>()
@@ -1344,6 +1347,7 @@ enum Type {
     Int4Vec,
     Uint,
     Int64,
+    Int64Vec,
     Uint64,
     Half,
     Half2,
@@ -1381,6 +1385,7 @@ enum Type {
     Matrix2d,
     Matrix3d,
     Matrix4d,
+    Dictionary,
 }
 
 fn keyword_lexeme(token: &Token<'_>) -> Option<&'static str> {
@@ -1500,6 +1505,42 @@ mod tests {
     }
 
     #[test]
+    // Accepts quoted dictionary keys that include namespace separators.
+    fn parse_dictionary_with_quoted_namespace_keys() {
+        let mut parser = Parser::new(
+            r#"
+#usda 1.0
+(
+    customLayerData = {
+        dictionary renderSettings = {
+            bool "rtx:raytracing:fractionalCutoutOpacity" = 1
+            token "rtx:rendermode" = "PathTracing"
+        }
+    }
+)
+"#,
+        );
+
+        let pseudo_root = parser.read_pseudo_root().unwrap();
+        let custom_layer_data = pseudo_root
+            .fields
+            .get("customLayerData")
+            .expect("customLayerData metadata present");
+        let dict = match custom_layer_data {
+            sdf::Value::Dictionary(dict) => dict,
+            other => panic!("customLayerData parsed as unexpected value: {other:?}"),
+        };
+
+        let render_settings = match dict.get("renderSettings") {
+            Some(sdf::Value::Dictionary(d)) => d,
+            other => panic!("renderSettings parsed as unexpected value: {other:?}"),
+        };
+
+        assert!(render_settings.contains_key("rtx:raytracing:fractionalCutoutOpacity"));
+        assert!(render_settings.contains_key("rtx:rendermode"));
+    }
+
+    #[test]
     // Ensures pseudo-root parsing preserves dictionary-valued metadata entries.
     fn parse_pseudo_root_dictionary_metadata() {
         let mut parser = Parser::new(
@@ -1560,6 +1601,102 @@ mod tests {
             sdf::Value::String(value) => assert_eq!(value, "/OmniverseKit_Persp"),
             sdf::Value::Token(value) => assert_eq!(value, "/OmniverseKit_Persp"),
             other => panic!("boundCamera stored as unexpected value: {other:?}"),
+        }
+    }
+
+    #[test]
+    // Verifies parsing of expressionVariables metadata field with typed values.
+    fn parse_expression_variables() {
+        let mut parser = Parser::new(
+            r#"
+#usda 1.0
+(
+    expressionVariables = {
+        string ASSET_PATH = "/models/characters"
+        bool USE_HIGH_RES = true
+        int64 LOD_LEVEL = 2
+    }
+)
+"#,
+        );
+
+        let pseudo_root = parser.read_pseudo_root().unwrap();
+
+        let expr_vars = pseudo_root
+            .fields
+            .get("expressionVariables")
+            .expect("expressionVariables metadata present");
+
+        let dict = match expr_vars {
+            sdf::Value::Dictionary(dict) => dict,
+            other => panic!("expressionVariables parsed as unexpected value: {other:?}"),
+        };
+
+        let asset_path = dict.get("ASSET_PATH").expect("ASSET_PATH entry");
+        match asset_path {
+            sdf::Value::String(value) => assert_eq!(value, "/models/characters"),
+            other => panic!("ASSET_PATH stored as unexpected value: {other:?}"),
+        }
+
+        let use_high_res = dict.get("USE_HIGH_RES").expect("USE_HIGH_RES entry");
+        match use_high_res {
+            sdf::Value::Bool(value) => assert!(*value),
+            other => panic!("USE_HIGH_RES stored as unexpected value: {other:?}"),
+        }
+
+        let lod_level = dict.get("LOD_LEVEL").expect("LOD_LEVEL entry");
+        match lod_level {
+            sdf::Value::Int64(value) => assert_eq!(*value, 2),
+            other => panic!("LOD_LEVEL stored as unexpected value: {other:?}"),
+        }
+    }
+
+    #[test]
+    // Verifies parsing of expressionVariables with array types.
+    fn parse_expression_variables_arrays() {
+        let mut parser = Parser::new(
+            r#"
+#usda 1.0
+(
+    expressionVariables = {
+        string[] RENDER_PASSES = ["beauty", "shadow", "reflection"]
+        int64[] FRAME_RANGE = [1, 100]
+        bool[] FLAGS = [true, false, true]
+    }
+)
+"#,
+        );
+
+        let pseudo_root = parser.read_pseudo_root().unwrap();
+
+        let expr_vars = pseudo_root
+            .fields
+            .get("expressionVariables")
+            .expect("expressionVariables metadata present");
+
+        let dict = match expr_vars {
+            sdf::Value::Dictionary(dict) => dict,
+            other => panic!("expressionVariables parsed as unexpected value: {other:?}"),
+        };
+
+        let render_passes = dict.get("RENDER_PASSES").expect("RENDER_PASSES entry");
+        match render_passes {
+            sdf::Value::TokenVec(values) | sdf::Value::StringVec(values) => {
+                assert_eq!(values, &["beauty", "shadow", "reflection"]);
+            }
+            other => panic!("RENDER_PASSES stored as unexpected value: {other:?}"),
+        }
+
+        let frame_range = dict.get("FRAME_RANGE").expect("FRAME_RANGE entry");
+        match frame_range {
+            sdf::Value::Int64Vec(values) => assert_eq!(values, &[1, 100]),
+            other => panic!("FRAME_RANGE stored as unexpected value: {other:?}"),
+        }
+
+        let flags = dict.get("FLAGS").expect("FLAGS entry");
+        match flags {
+            sdf::Value::BoolVec(values) => assert_eq!(values, &[true, false, true]),
+            other => panic!("FLAGS stored as unexpected value: {other:?}"),
         }
     }
 
