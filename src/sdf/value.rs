@@ -228,6 +228,17 @@ impl Value {
             _ => Vec::new(),
         }
     }
+
+    /// Returns payload-list-op values in authored order.
+    #[inline]
+    pub fn as_payload_list(&self) -> Vec<Payload> {
+        match self {
+            Self::PayloadListOp(op) => {
+                list_op_items(&op.explicit_items, &op.prepended_items, &op.added_items)
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 fn list_op_items<T: Clone>(

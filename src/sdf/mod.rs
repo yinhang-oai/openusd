@@ -291,4 +291,22 @@ impl Spec {
             .map(Value::as_token_list)
             .unwrap_or_default()
     }
+
+    /// Returns authored payload arcs in composed list-op order.
+    #[inline]
+    pub fn payloads(&self) -> Vec<Payload> {
+        self.fields
+            .get(schema::FieldKey::Payload.as_str())
+            .map(Value::as_payload_list)
+            .unwrap_or_default()
+    }
+
+    /// Returns authored sublayer asset paths in layer-stack order.
+    #[inline]
+    pub fn sub_layers(&self) -> Vec<String> {
+        match self.fields.get(schema::FieldKey::SubLayers.as_str()) {
+            Some(Value::StringVec(paths)) => paths.clone(),
+            _ => Vec::new(),
+        }
+    }
 }
